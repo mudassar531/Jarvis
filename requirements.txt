@@ -1,0 +1,28 @@
+# Core framework
+pipecat-ai[silero,google,deepgram,kokoro,groq,local]>=0.0.105
+
+# Server mode
+fastapi>=0.110.0
+uvicorn>=0.27.0
+websockets>=12.0
+
+# Google Gemini (LLM + Vision for computer use)
+google-genai>=1.0.0
+
+# Config
+python-dotenv>=1.0.0
+
+# HTTP client (for web search)
+aiohttp>=3.9.0
+requests>=2.31.0
+
+# Computer use / desktop automation
+pyautogui>=0.9.54
+Pillow>=10.0.0
+pyperclip>=1.8.2
+
+# Audio
+PyAudio>=0.2.14
+
+# Logging
+loguru>=0.7.0
