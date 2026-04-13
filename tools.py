@@ -107,27 +107,15 @@ def get_tools():
         ),
         # ──── Gmail Email Tools ────
         FunctionSchema(
-            name="send_email",
-            description="Draft an email to send. Looks up the recipient by name in contacts. After drafting, ALWAYS read back the draft and ask the user to confirm before sending. Compose a professional email body based on what the user wants to say.",
+            name="compose_email",
+            description="Open Gmail in Chrome with a pre-filled email (to, subject, body, cc). The user can see the email in the browser, review it, and ask you to fix spelling or other errors via computer_use before sending. If the user gives a name, look up their email in contacts first. If they give an email address directly, use that.",
             properties={
-                "to_name": {"type": "string", "description": "Recipient name (looked up in contacts) OR direct email address"},
+                "to": {"type": "string", "description": "Recipient name (looked up in contacts) OR direct email address"},
                 "subject": {"type": "string", "description": "Email subject line"},
-                "body": {"type": "string", "description": "Full email body. Write a complete professional message with greeting and sign-off based on user's intent."},
-                "cc_name": {"type": "string", "description": "Optional CC recipient name or email address"},
+                "body": {"type": "string", "description": "Full email body. Write a complete professional message with greeting and sign-off based on what the user wants to say."},
+                "cc": {"type": "string", "description": "Optional CC recipient name or email address"},
             },
-            required=["to_name", "subject", "body"],
-        ),
-        FunctionSchema(
-            name="confirm_send_email",
-            description="Send the previously drafted email. ONLY use after the user explicitly confirms. Never send without confirmation.",
-            properties={},
-            required=[],
-        ),
-        FunctionSchema(
-            name="cancel_email",
-            description="Cancel the pending email draft. Use when user says no or wants to start over.",
-            properties={},
-            required=[],
+            required=["to", "subject", "body"],
         ),
         FunctionSchema(
             name="read_inbox",
@@ -182,17 +170,13 @@ async def handle_tool_call(tool_name: str, tool_input: dict) -> str:
             result = _google_search_browse(tool_input["query"])
         elif tool_name == "save_memory":
             result = _save_memory(tool_input.get("category", "user"), tool_input["content"])
-        elif tool_name == "send_email":
-            result = await _send_email(
-                tool_input["to_name"],
+        elif tool_name == "compose_email":
+            result = _compose_email(
+                tool_input["to"],
                 tool_input["subject"],
                 tool_input["body"],
-                tool_input.get("cc_name"),
+                tool_input.get("cc"),
             )
-        elif tool_name == "confirm_send_email":
-            result = _confirm_send_email()
-        elif tool_name == "cancel_email":
-            result = _cancel_email()
         elif tool_name == "read_inbox":
             result = await _read_inbox(tool_input.get("count", 5))
         elif tool_name == "add_contact":
@@ -473,69 +457,59 @@ def _save_memory(category: str, content: str) -> str:
 # Gmail Email Tools
 # ──────────────────────────────────────────────
 
-async def _send_email(to_name: str, subject: str, body: str, cc_name: str = None) -> str:
-    """Draft an email — looks up contact name → email, creates draft for confirmation."""
+def _compose_email(to: str, subject: str, body: str, cc: str = None) -> str:
+    """Open Gmail compose in Chrome with pre-filled fields."""
+    import urllib.parse
     from contacts import find_contact
-    from gmail_service import draft_email
 
-    # Resolve recipient
-    to_email = None
-    if "@" in to_name:
-        to_email = to_name
-        to_display = to_name
-    else:
-        contact = find_contact(to_name)
+    # Resolve recipient: name → email lookup
+    to_email = to
+    if "@" not in to:
+        contact = find_contact(to)
         if contact:
             to_email = contact["email"]
-            to_display = f"{contact['name']} ({contact['email']})"
+            logger.info(f"📧 Contact found: {to} → {contact['email']}")
         else:
             return (
-                f"I don't have an email address for '{to_name}'. "
-                f"Please tell me their email and I'll save it as a contact. "
-                f"For example: 'Remember that {to_name}'s email is name@example.com'"
+                f"I don't have an email address for '{to}'. "
+                f"Tell me their email and I'll save it, or give me the email address directly."
             )
 
-    # Resolve CC
+    # Resolve CC if provided
     cc_email = None
-    cc_display = None
-    if cc_name:
-        if "@" in cc_name:
-            cc_email = cc_name
-            cc_display = cc_name
+    if cc:
+        if "@" in cc:
+            cc_email = cc
         else:
-            cc_contact = find_contact(cc_name)
+            cc_contact = find_contact(cc)
             if cc_contact:
                 cc_email = cc_contact["email"]
-                cc_display = f"{cc_contact['name']} ({cc_contact['email']})"
             else:
-                return (
-                    f"I don't have an email for CC recipient '{cc_name}'. "
-                    f"Please tell me their email first."
-                )
+                return f"I don't have an email for CC recipient '{cc}'. Tell me their email first."
 
-    draft = draft_email(to_email, subject, body, cc_email)
+    # Build Gmail compose URL
+    params = {
+        "view": "cm",
+        "fs": "1",
+        "to": to_email,
+        "su": subject,
+        "body": body,
+    }
+    if cc_email:
+        params["cc"] = cc_email
 
-    result = f"Email drafted.\n"
-    result += f"To: {to_display}\n"
-    if cc_display:
-        result += f"CC: {cc_display}\n"
+    url = "https://mail.google.com/mail/?" + urllib.parse.urlencode(params)
+    webbrowser.open(url)
+
+    logger.info(f"📧 Gmail compose opened → To: {to_email}, Subject: {subject}")
+
+    result = f"I've opened Gmail with your email ready to review.\n"
+    result += f"To: {to_email}\n"
+    if cc_email:
+        result += f"CC: {cc_email}\n"
     result += f"Subject: {subject}\n"
-    result += f"Body preview: {body[:200]}"
-
-    logger.info(f"📧 Draft ready: {to_display} — {subject}")
+    result += "You can see it in Chrome now. Let me know if you want me to fix any spelling or make changes — I'll use screen control to edit it. When it looks good, just tell me to hit send."
     return result
-
-
-def _confirm_send_email() -> str:
-    """Send the pending draft via Gmail API."""
-    from gmail_service import confirm_and_send
-    return confirm_and_send()
-
-
-def _cancel_email() -> str:
-    """Cancel the pending email draft."""
-    from gmail_service import cancel_draft
-    return cancel_draft()
 
 
 async def _read_inbox(count: int = 5) -> str:
