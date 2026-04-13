@@ -16,6 +16,7 @@ from loguru import logger
 
 load_dotenv()
 
+# Action log for auditability
 ACTION_LOG = []
 
 
@@ -67,7 +68,7 @@ def get_tools():
         ),
         FunctionSchema(
             name="computer_use",
-            description="Control the computer visually — see the screen, click buttons, type text, navigate any app. Use ONLY for tasks that require seeing the screen and clicking specific things.",
+            description="Control the computer visually — see the screen, click buttons, type text, navigate any app. Use ONLY for tasks that require seeing the screen and clicking specific things. Examples: 'click the first video on YouTube', 'click the submit button', 'select the second Chrome profile'.",
             properties={
                 "task": {"type": "string", "description": "Natural language description of what to do on the computer"},
             },
@@ -83,7 +84,7 @@ def get_tools():
             name="youtube_search",
             description="Search YouTube for a video and open the results page. Use when user asks to find or play a song, video, or anything on YouTube.",
             properties={
-                "query": {"type": "string", "description": "The YouTube search query"},
+                "query": {"type": "string", "description": "The YouTube search query, e.g. 'Never Gonna Give You Up Rick Astley'"},
             },
             required=["query"],
         ),
@@ -103,6 +104,53 @@ def get_tools():
                 "content": {"type": "string", "description": "The fact or preference to remember"},
             },
             required=["category", "content"],
+        ),
+        # ──── Gmail Email Tools ────
+        FunctionSchema(
+            name="send_email",
+            description="Draft an email to send. Looks up the recipient by name in contacts. After drafting, ALWAYS read back the draft and ask the user to confirm before sending. Compose a professional email body based on what the user wants to say.",
+            properties={
+                "to_name": {"type": "string", "description": "Recipient name (looked up in contacts) OR direct email address"},
+                "subject": {"type": "string", "description": "Email subject line"},
+                "body": {"type": "string", "description": "Full email body. Write a complete professional message with greeting and sign-off based on user's intent."},
+                "cc_name": {"type": "string", "description": "Optional CC recipient name or email address"},
+            },
+            required=["to_name", "subject", "body"],
+        ),
+        FunctionSchema(
+            name="confirm_send_email",
+            description="Send the previously drafted email. ONLY use after the user explicitly confirms. Never send without confirmation.",
+            properties={},
+            required=[],
+        ),
+        FunctionSchema(
+            name="cancel_email",
+            description="Cancel the pending email draft. Use when user says no or wants to start over.",
+            properties={},
+            required=[],
+        ),
+        FunctionSchema(
+            name="read_inbox",
+            description="Read the latest emails from the user's Gmail inbox.",
+            properties={
+                "count": {"type": "integer", "description": "Number of emails to fetch (default 5, max 20)"},
+            },
+            required=[],
+        ),
+        FunctionSchema(
+            name="add_contact",
+            description="Save a person's email to contacts for future use. Use when user tells you someone's email.",
+            properties={
+                "name": {"type": "string", "description": "Person's name"},
+                "email": {"type": "string", "description": "Person's email address"},
+            },
+            required=["name", "email"],
+        ),
+        FunctionSchema(
+            name="list_contacts",
+            description="Show all saved contacts with their email addresses.",
+            properties={},
+            required=[],
         ),
     ]
     return ToolsSchema(standard_tools=schemas)
@@ -134,6 +182,23 @@ async def handle_tool_call(tool_name: str, tool_input: dict) -> str:
             result = _google_search_browse(tool_input["query"])
         elif tool_name == "save_memory":
             result = _save_memory(tool_input.get("category", "user"), tool_input["content"])
+        elif tool_name == "send_email":
+            result = await _send_email(
+                tool_input["to_name"],
+                tool_input["subject"],
+                tool_input["body"],
+                tool_input.get("cc_name"),
+            )
+        elif tool_name == "confirm_send_email":
+            result = _confirm_send_email()
+        elif tool_name == "cancel_email":
+            result = _cancel_email()
+        elif tool_name == "read_inbox":
+            result = await _read_inbox(tool_input.get("count", 5))
+        elif tool_name == "add_contact":
+            result = _add_contact(tool_input["name"], tool_input["email"])
+        elif tool_name == "list_contacts":
+            result = _list_contacts()
         else:
             result = f"Unknown tool: {tool_name}"
     except Exception as e:
@@ -175,8 +240,10 @@ async def _search_web(query: str) -> str:
     if not results:
         return "No search results found."
 
+    # Print formatted results to terminal for visual display
     _print_search_results(query, results)
 
+    # Return concise text for the LLM to speak aloud
     spoken = [f"{r['title']}: {r['description']}" for r in results[:3]]
     return f"Search results for '{query}':\n" + "\n".join(f"- {s}" for s in spoken)
 
@@ -228,6 +295,7 @@ def _open_url(url: str) -> str:
 
 def _open_application(name: str) -> str:
     """Open a desktop application by name on Windows."""
+    # Map common names to Windows launch commands
     app_map = {
         "chrome": "start chrome",
         "google chrome": "start chrome",
@@ -341,7 +409,7 @@ async def _take_screenshot() -> str:
 
         api_key = os.getenv("GOOGLE_CREDENTIALS", "")
         if not api_key:
-            return "Cannot describe screen: no Google API key configured."
+            return "Cannot describe screen: no Google API key."
 
         client = genai.Client(api_key=api_key)
         response = client.models.generate_content(
@@ -387,6 +455,7 @@ def _save_memory(category: str, content: str) -> str:
     from memory import save_fact, save_preference
 
     if category == "preference":
+        # Try to extract key=value from content
         if ":" in content:
             key, value = content.split(":", 1)
             save_preference(key.strip(), value.strip())
@@ -398,3 +467,111 @@ def _save_memory(category: str, content: str) -> str:
 
     logger.info(f"🧠 Saved to memory [{category}]: {content}")
     return f"Got it, I'll remember that."
+
+
+# ──────────────────────────────────────────────
+# Gmail Email Tools
+# ──────────────────────────────────────────────
+
+async def _send_email(to_name: str, subject: str, body: str, cc_name: str = None) -> str:
+    """Draft an email — looks up contact name → email, creates draft for confirmation."""
+    from contacts import find_contact
+    from gmail_service import draft_email
+
+    # Resolve recipient
+    to_email = None
+    if "@" in to_name:
+        to_email = to_name
+        to_display = to_name
+    else:
+        contact = find_contact(to_name)
+        if contact:
+            to_email = contact["email"]
+            to_display = f"{contact['name']} ({contact['email']})"
+        else:
+            return (
+                f"I don't have an email address for '{to_name}'. "
+                f"Please tell me their email and I'll save it as a contact. "
+                f"For example: 'Remember that {to_name}'s email is name@example.com'"
+            )
+
+    # Resolve CC
+    cc_email = None
+    cc_display = None
+    if cc_name:
+        if "@" in cc_name:
+            cc_email = cc_name
+            cc_display = cc_name
+        else:
+            cc_contact = find_contact(cc_name)
+            if cc_contact:
+                cc_email = cc_contact["email"]
+                cc_display = f"{cc_contact['name']} ({cc_contact['email']})"
+            else:
+                return (
+                    f"I don't have an email for CC recipient '{cc_name}'. "
+                    f"Please tell me their email first."
+                )
+
+    draft = draft_email(to_email, subject, body, cc_email)
+
+    result = f"Email drafted.\n"
+    result += f"To: {to_display}\n"
+    if cc_display:
+        result += f"CC: {cc_display}\n"
+    result += f"Subject: {subject}\n"
+    result += f"Body preview: {body[:200]}"
+
+    logger.info(f"📧 Draft ready: {to_display} — {subject}")
+    return result
+
+
+def _confirm_send_email() -> str:
+    """Send the pending draft via Gmail API."""
+    from gmail_service import confirm_and_send
+    return confirm_and_send()
+
+
+def _cancel_email() -> str:
+    """Cancel the pending email draft."""
+    from gmail_service import cancel_draft
+    return cancel_draft()
+
+
+async def _read_inbox(count: int = 5) -> str:
+    """Read latest emails from Gmail inbox."""
+    import asyncio
+    from gmail_service import read_inbox
+
+    count = min(max(1, count), 20)
+    emails = await asyncio.to_thread(read_inbox, count)
+
+    if not emails:
+        return "Your inbox is empty or Gmail is not connected."
+
+    lines = [f"You have {len(emails)} recent emails:"]
+    for i, e in enumerate(emails, 1):
+        sender = e["from"].split("<")[0].strip().strip('"')
+        lines.append(f"{i}. From {sender}: {e['subject']}. {e['snippet'][:80]}")
+
+    return "\n".join(lines)
+
+
+def _add_contact(name: str, email: str) -> str:
+    """Add a contact for email lookup."""
+    from contacts import add_contact
+    return add_contact(name, email)
+
+
+def _list_contacts() -> str:
+    """List all saved contacts."""
+    from contacts import list_contacts
+
+    contacts = list_contacts()
+    if not contacts:
+        return "No contacts saved yet. Tell me someone's email and I'll remember it."
+
+    lines = [f"You have {len(contacts)} contacts:"]
+    for c in contacts:
+        lines.append(f"- {c['name']}: {c['email']}")
+    return "\n".join(lines)

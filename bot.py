@@ -9,6 +9,7 @@ import asyncio
 import os
 import struct
 import sys
+
 import warnings
 
 from dotenv import load_dotenv
@@ -40,7 +41,7 @@ from tools import get_tools, handle_tool_call
 from ui import StatusOverlay
 from memory import (
     start_conversation, save_message, end_conversation,
-    summarize_conversation, build_memory_context, get_memory_stats,
+    summarize_conversation, build_memory_context, save_fact, get_memory_stats,
 )
 from context import build_context_string
 
@@ -48,7 +49,10 @@ load_dotenv()
 
 AUDIO_GAIN = float(os.getenv("AUDIO_GAIN", "15.0"))
 
+# Global overlay instance
 overlay = StatusOverlay()
+
+# Global conversation tracking
 current_conv_id = None
 
 
@@ -75,8 +79,10 @@ class AudioGainFilter(BaseAudioFilter):
         samples = struct.unpack(f"<{n}h", audio)
 
         if self._input_channels >= 2:
+            # Stereo: extract left channel
             mono = samples[0::2]
         else:
+            # Already mono
             mono = samples
 
         m = len(mono)
@@ -117,6 +123,12 @@ Your tools:
 - computer_use: SLOW but powerful — sees the screen and clicks/types. Use ONLY when you need to interact with what's already on screen (click a button, select a video, fill a form).
 - take_screenshot: See what's on screen right now.
 - save_memory: Save an important fact or preference the user tells you.
+- send_email: Draft an email to someone. Looks up their name in contacts. ALWAYS read back the draft and ask for confirmation.
+- confirm_send_email: Send the drafted email ONLY after user confirms.
+- cancel_email: Cancel the pending draft if user says no.
+- read_inbox: Read latest emails from Gmail.
+- add_contact: Save someone's email for future use.
+- list_contacts: Show all saved contacts.
 
 WHEN TO USE WHICH TOOL:
 - "Search YouTube for Bohemian Rhapsody": use youtube_search (instant)
@@ -127,6 +139,21 @@ WHEN TO USE WHICH TOOL:
 - "What's on my screen?": use take_screenshot
 - "What's the weather?": use search_web
 - "Remember that I like dark mode": use save_memory
+- "Send email to Ahmed about the meeting": use send_email
+- "Yes send it" / "Go ahead": use confirm_send_email
+- "No don't send it": use cancel_email
+- "Check my email" / "Read my inbox": use read_inbox
+- "Ahmed's email is ahmed@gmail.com": use add_contact
+- "Who's in my contacts?": use list_contacts
+
+EMAIL RULES (CRITICAL):
+1. When user says "send email to [name]", use send_email to draft it.
+2. Compose a professional, well-written body based on what the user wants to say.
+3. ALWAYS read back: the recipient, subject, and a brief body summary.
+4. ALWAYS ask "Shall I send it?" and wait for confirmation.
+5. Only call confirm_send_email when user explicitly says yes/send/go ahead.
+6. If the contact name is not found, ask the user for their email address.
+7. If user provides an email, save it with add_contact for next time.
 
 ALWAYS prefer instant tools over computer_use. Only use computer_use when you actually need to SEE and CLICK on screen elements.
 When using tools, briefly tell the user what you're doing then report the result conversationally.
@@ -139,10 +166,12 @@ def build_system_prompt() -> str:
     """Build system prompt with dynamic memory and context."""
     parts = [BASE_SYSTEM_PROMPT]
 
+    # Inject memory
     memory_ctx = build_memory_context()
     if memory_ctx:
         parts.append(f"\n\n--- YOUR MEMORY ---\n{memory_ctx}")
 
+    # Inject context
     context_str = build_context_string()
     if context_str:
         parts.append(f"\n\n--- CURRENT CONTEXT ---\n{context_str}")
@@ -168,6 +197,7 @@ class InputStatusMonitor(FrameProcessor):
             text = frame.text if hasattr(frame, "text") else ""
             if text:
                 self._overlay.update("thinking", f'You: "{text}"')
+                # Save to memory
                 if current_conv_id:
                     save_message(current_conv_id, "user", text)
 
@@ -195,7 +225,7 @@ class OutputStatusMonitor(FrameProcessor):
 def get_llm_service():
     """Pick LLM: Google Gemini (best) > Ollama (local) > Groq (cloud free tier)."""
 
-    # 1. Google Gemini — best option
+    # 1. Google Gemini — best option (fast, great tool calling, paid = no limits)
     google_key = os.getenv("GOOGLE_CREDENTIALS", "")
     if google_key and google_key != "YOUR_KEY_HERE":
         from pipecat.services.google.llm import GoogleLLMService
@@ -234,7 +264,7 @@ def get_llm_service():
         logger.info(f"Using CLOUD LLM: Groq ({groq_model})")
         return GroqLLMService(api_key=groq_key, model=groq_model)
 
-    logger.error("No LLM available! Set GOOGLE_CREDENTIALS or GROQ_API_KEY in .env, or run Ollama locally.")
+    logger.error("No LLM available! Set GOOGLE_CREDENTIALS or GROQ_API_KEY in .env")
     sys.exit(1)
 
 
@@ -242,6 +272,7 @@ async def _tool_handler(function_name, tool_call_id, args, llm, context, result_
     """Universal handler for all tool calls."""
     overlay.update("thinking", f"Running tool: {function_name}")
     if function_name == "computer_use":
+        # Pass status callback so computer_use can update the overlay
         from computer_use import run_computer_use
         result = await run_computer_use(args.get("task", ""), status_callback=overlay.update)
     else:
@@ -283,7 +314,7 @@ def pick_audio_devices():
     print("║      🎧 JARVIS Audio Device Setup     ║")
     print("╚══════════════════════════════════════╝\n")
 
-    # --- Input devices ---
+    # --- Input devices (deduplicated, active only) ---
     seen_names = set()
     inputs = []
     for i in range(pa.get_device_count()):
@@ -315,7 +346,7 @@ def pick_audio_devices():
     in_idx, in_name, in_channels, _ = sel
     print(f"  ✓ Input: {in_name}\n")
 
-    # --- Output devices ---
+    # --- Output devices (deduplicated, active only) ---
     seen_names = set()
     outputs = []
     for i in range(pa.get_device_count()):
@@ -354,6 +385,8 @@ async def create_pipeline(in_device=None, out_device=None, in_channels=2, transp
     """Create the voice agent pipeline. Accepts optional transport for server mode."""
 
     if transport is None:
+        # Use stereo recording + mono extraction for stereo-only mics (Realtek)
+        # Use mono recording + gain for mono mics (USB headsets)
         use_stereo = in_channels >= 2
         audio_filter = AudioGainFilter(gain=AUDIO_GAIN, input_channels=in_channels)
         vad = SileroVADAnalyzer(
@@ -396,9 +429,11 @@ async def create_pipeline(in_device=None, out_device=None, in_channels=2, transp
     context = OpenAILLMContext(messages, tools=tools)
     context_aggregator = llm.create_context_aggregator(context)
 
+    # Log memory stats
     stats = get_memory_stats()
     logger.info(f"🧠 Memory loaded: {stats['facts']} facts, {stats['preferences']} preferences, {stats['conversations']} past conversations")
 
+    # Register tool handlers
     for tool in tools.standard_tools:
         llm.register_function(tool.name, _tool_handler)
 
@@ -425,11 +460,14 @@ async def create_pipeline(in_device=None, out_device=None, in_channels=2, transp
 async def main():
     global current_conv_id
 
+    # Pick audio devices
     in_dev, out_dev, in_ch = pick_audio_devices()
 
+    # Start memory conversation
     current_conv_id = start_conversation()
     stats = get_memory_stats()
 
+    # Start the overlay
     overlay.start()
     overlay.update("starting", "Initializing JARVIS Neural OS...")
 
@@ -438,7 +476,7 @@ async def main():
     print("║    Voice Agent • Memory • Computer Use    ║")
     print("╚══════════════════════════════════════════╝")
     print(f"  🧠 Memory: {stats['facts']} facts, {stats['conversations']} past conversations")
-    print(f"  🤖 LLM: Auto-detected (Gemini > Ollama > Groq)")
+    print(f"  🤖 LLM: Gemini 2.5 Flash")
     print(f"  🎤 STT: Deepgram Nova-3")
     print(f"  🔊 TTS: Kokoro\n")
 
@@ -477,6 +515,7 @@ if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
+        # Run shutdown to save memory
         try:
             asyncio.run(shutdown())
         except Exception:
