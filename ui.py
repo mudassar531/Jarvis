@@ -9,6 +9,7 @@ import threading
 import tkinter as tk
 
 
+# States and their visual config: (label, bg_color, fg_color, emoji)
 STATES = {
     "starting": ("  STARTING...  ", "#333333", "#AAAAAA", "⏳"),
     "live":     ("  ● JARVIS LIVE  ", "#1a1a2e", "#00ff88", "🟢"),
@@ -48,23 +49,27 @@ class StatusOverlay:
         root = tk.Tk()
         self._root = root
         root.title("JARVIS")
-        root.overrideredirect(True)
-        root.attributes("-topmost", True)
+        root.overrideredirect(True)  # No title bar
+        root.attributes("-topmost", True)  # Always on top
         root.attributes("-alpha", 0.92)
         root.configure(bg="#1a1a2e")
 
+        # Position top-right of screen
         screen_w = root.winfo_screenwidth()
         x = screen_w - 340
         y = 20
         root.geometry(f"320x100+{x}+{y}")
 
+        # Make it draggable
         self._drag_data = {"x": 0, "y": 0}
         root.bind("<Button-1>", self._on_drag_start)
         root.bind("<B1-Motion>", self._on_drag_motion)
 
+        # Rounded appearance via a frame
         frame = tk.Frame(root, bg="#1a1a2e", padx=10, pady=5)
         frame.pack(fill=tk.BOTH, expand=True)
 
+        # Status label
         self._label = tk.Label(
             frame,
             text="  ⏳ STARTING...  ",
@@ -75,6 +80,7 @@ class StatusOverlay:
         )
         self._label.pack(fill=tk.X, pady=(5, 0))
 
+        # Transcript/subtitle label
         self._transcript_label = tk.Label(
             frame,
             text="Initializing pipeline...",
@@ -86,6 +92,7 @@ class StatusOverlay:
         )
         self._transcript_label.pack(fill=tk.X, pady=(0, 5))
 
+        # Poll the queue every 100ms
         self._poll_queue()
         root.mainloop()
 
@@ -100,6 +107,7 @@ class StatusOverlay:
                     label_text, bg, fg, _ = STATES[state]
                     self._label.config(text=label_text, fg=fg, bg=bg)
                     self._root.configure(bg=bg)
+                    # Update all child backgrounds
                     for w in self._root.winfo_children():
                         w.configure(bg=bg)
                         for c in w.winfo_children():

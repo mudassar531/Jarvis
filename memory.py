@@ -7,12 +7,11 @@ Uses SQLite for storage and Gemini for summarization.
 import datetime
 import json
 import os
-import re
 import sqlite3
 
 from loguru import logger
 
-MEMORY_DB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "jarvis_memory.db")
+MEMORY_DB = os.path.join(os.path.dirname(__file__), "jarvis_memory.db")
 
 
 def _get_db() -> sqlite3.Connection:
@@ -102,6 +101,7 @@ def save_fact(category: str, content: str, source: str = "conversation", importa
     """Save an important fact about the user or world."""
     db = _get_db()
     now = datetime.datetime.now().isoformat()
+    # Avoid exact duplicates
     existing = db.execute(
         "SELECT id FROM facts WHERE content = ? AND category = ?",
         (content, category),
@@ -180,6 +180,7 @@ def build_memory_context() -> str:
     """Build a memory context string to inject into the system prompt."""
     parts = []
 
+    # User facts
     facts = get_facts(limit=15)
     if facts:
         user_facts = [f for f in facts if f["category"] == "user"]
@@ -189,10 +190,12 @@ def build_memory_context() -> str:
         if other_facts:
             parts.append("THINGS I REMEMBER:\n" + "\n".join(f"- [{f['category']}] {f['content']}" for f in other_facts))
 
+    # Preferences
     prefs = get_preferences()
     if prefs:
         parts.append("YOUR PREFERENCES:\n" + "\n".join(f"- {k}: {v}" for k, v in prefs.items()))
 
+    # Recent conversation summaries
     convos = get_recent_conversations(limit=3)
     summaries = [c for c in convos if c.get("summary")]
     if summaries:
@@ -216,6 +219,7 @@ async def summarize_conversation(conv_id: int) -> str:
 
     api_key = os.getenv("GOOGLE_CREDENTIALS", "")
     if not api_key:
+        # Fallback: just save first/last message as summary
         summary = f"Conversation with {len(messages)} turns"
         end_conversation(conv_id, summary)
         return summary
@@ -246,14 +250,17 @@ Return ONLY the JSON object, no markdown."""
 
         text = response.text.strip()
         if text.startswith("```"):
+            import re
             text = re.sub(r"^```(?:json)?\s*", "", text)
             text = re.sub(r"\s*```$", "", text)
 
         data = json.loads(text)
         summary = data.get("summary", "")
 
+        # Save the summary
         end_conversation(conv_id, summary)
 
+        # Save extracted facts
         for fact in data.get("user_facts", []):
             if fact.strip():
                 save_fact("user", fact.strip(), source=f"conversation #{conv_id}", importance=8)

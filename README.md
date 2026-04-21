@@ -1,168 +1,184 @@
-# 🧠 JARVIS — Voice Agent Neural Operating System
+# 🤖 JARVIS — AI Voice Assistant
 
-An always-on AI assistant that lives on your Windows PC. Talk to it naturally — it listens, thinks, speaks back, controls your computer, remembers your conversations, and learns about you over time.
+JARVIS is a real-time AI voice assistant for Windows that listens, thinks, and acts. It combines speech recognition, LLM reasoning, text-to-speech, and computer vision to create a hands-free desktop assistant.
 
-## Architecture
+**Pipeline:** Silero VAD → Deepgram STT → Gemini LLM → Kokoro TTS
 
-```
-┌─────────────┐    ┌──────────────┐    ┌──────────────┐    ┌─────────────┐
-│  Microphone  │───▶│  Silero VAD  │───▶│ Deepgram STT │───▶│ Gemini 2.5  │
-│  (PyAudio)   │    │  (local)     │    │  (Nova-3)    │    │ Flash (LLM) │
-└─────────────┘    └──────────────┘    └──────────────┘    └──────┬──────┘
-                                                                  │
-┌─────────────┐    ┌──────────────┐                               │
-│  Speakers   │◀───│  Kokoro TTS  │◀──────────────────────────────┘
-│  (PyAudio)  │    │  (local)     │
-└─────────────┘    └──────────────┘
-```
+![JARVIS](image.png)
 
-**Pipeline:** Silero VAD → Deepgram STT → Gemini 2.5 Flash → Kokoro TTS
+---
 
-## Features
+## ✨ Features
 
-| Feature | Description |
-|---|---|
-| 🎙️ **Voice Control** | Always-on listening with Silero VAD + Deepgram STT |
-| 🧠 **Persistent Memory** | Remembers facts, preferences, and past conversations (SQLite) |
-| 🖥️ **Computer Use** | Vision-based desktop automation — sees screen, clicks, types (Gemini Vision + pyautogui) |
-| 🔍 **Web Search** | Brave Search API with DuckDuckGo fallback |
-| 🚀 **App Launcher** | Opens any Windows application by name |
-| 🌐 **URL/YouTube** | Opens URLs, YouTube searches, Google searches |
-| 📁 **File Reader** | Reads local files on command |
-| ⚡ **System Commands** | Runs any Windows shell command |
-| 📸 **Screenshot** | Takes & describes what's on screen |
-| 💬 **Context Aware** | Knows active window, time of day, and user history |
-| 🎯 **Status Overlay** | Floating always-on-top indicator (LIVE/LISTENING/THINKING/SPEAKING) |
-| 📧 **Gmail Email** | Send/read emails via voice — draft → confirm → send pattern |
-| 📇 **Contacts** | Name → email lookup with fuzzy matching |
+- **Voice-to-Action (V2A)** — trigger tools by speaking naturally
+- **Computer Use** — vision-based screen automation (screenshot → Gemini Vision → pyautogui)
+- **Persistent Memory** — remembers conversations, user facts, and preferences across sessions
+- **Context Awareness** — detects active window, time of day, and more
+- **Gmail Integration** — send and read emails by voice
+- **Web Search** — Brave Search or DuckDuckGo fallback
+- **Floating Overlay UI** — shows LIVE / LISTENING / THINKING / SPEAKING states
+- **WebSocket Server** — browser client support via FastAPI
 
-## V2A (Voice-to-Action) Tools
+---
 
-The `tools.py` module is the V2A engine — it converts voice commands into system actions. Current tools:
+## 🚀 Quick Start
 
-| Tool | Speed | Description |
-|---|---|---|
-| `search_web` | Fast | Brave Search / DuckDuckGo |
-| `open_application` | Instant | Launch any Windows app |
-| `open_url` | Instant | Open any URL in browser |
-| `youtube_search` | Instant | YouTube search in browser |
-| `google_search_browse` | Instant | Google search in browser |
-| `read_file` | Fast | Read local file contents |
-| `run_command` | Fast | Execute Windows commands |
-| `computer_use` | Slow | Vision-based screen automation |
-| `take_screenshot` | Fast | Capture & describe screen |
-| `save_memory` | Instant | Save user facts/preferences |
-| `send_email` | Fast | Draft email (contact lookup + HTML) |
-| `confirm_send_email` | Fast | Send drafted email via Gmail |
-| `cancel_email` | Instant | Cancel pending email draft |
-| `read_inbox` | Fast | Read latest Gmail inbox emails |
-| `add_contact` | Instant | Save name → email mapping |
-| `list_contacts` | Instant | Show all saved contacts |
-
-**To add a new V2A tool:**
-1. Add a `FunctionSchema` in `get_tools()` in `tools.py`
-2. Add a handler function (e.g., `_my_new_tool()`)
-3. Add the routing in `handle_tool_call()`
-4. The LLM will automatically discover and use it based on the schema description
-
-## Quick Start
-
-### Prerequisites
-- **Python 3.11+**
-- **Windows 10/11** (computer use + context awareness use Win32 APIs)
-- **A microphone and speakers/headphones**
-
-### 1. Clone & Setup
+### 1. Clone the Repo
 
 ```bash
 git clone https://github.com/mudassar531/Jarvis.git
 cd Jarvis
+```
 
+### 2. Set Up Python Environment
+
+**Requirements:** Python 3.11+ on Windows 10/11
+
+```bash
 # Create virtual environment
 python -m venv venv
+
+# Activate it
 venv\Scripts\activate
 
-# Install dependencies
+# Install all dependencies
 pip install -r requirements.txt
 ```
 
-### 2. Configure API Keys
+> ⚠️ **PyAudio note:** If `pip install` fails on PyAudio:
+> ```bash
+> pip install pipwin
+> pipwin install pyaudio
+> ```
+> Or download the `.whl` from https://www.lfd.uci.edu/~gohlke/pythonlibs/#pyaudio
+
+### 3. Set Up API Keys
 
 ```bash
 copy .env.example .env
 ```
 
-Edit `.env` and add your API keys. **Minimum required:**
-- `DEEPGRAM_API_KEY` — for speech-to-text ([get free key](https://console.deepgram.com))
-- **One LLM** (pick one):
-  - `GOOGLE_CREDENTIALS` — Google Gemini (**recommended**, [get key](https://aistudio.google.com/app/apikey))
-  - Or install [Ollama](https://ollama.com) + `ollama pull qwen3:8b` (free, local)
-  - Or `GROQ_API_KEY` — Groq cloud ([get free key](https://console.groq.com/keys))
+Edit `.env` and fill in your keys:
 
-**Optional:**
-- `BRAVE_API_KEY` — for web search ([get free key](https://api.search.brave.com))
+| Key | Where to Get It | Notes |
+|-----|----------------|-------|
+| `DEEPGRAM_API_KEY` | https://console.deepgram.com | **Required** — $200 free credits |
+| `GOOGLE_CREDENTIALS` | https://aistudio.google.com/app/apikey | **Required** — powers LLM + Vision |
+| `BRAVE_API_KEY` | https://api.search.brave.com | Optional — 2000 queries/month free |
+| `GROQ_API_KEY` | https://console.groq.com/keys | Alternative LLM (free tier) |
 
-### Gmail Setup (for email features)
+**Local LLM option:** Install [Ollama](https://ollama.com) then run `ollama pull qwen3:8b`
 
-1. Go to [Google Cloud Console](https://console.cloud.google.com)
-2. Create a new project (or use existing)
-3. Enable the **Gmail API**: APIs & Services → Library → search "Gmail API" → Enable
-4. Create credentials: APIs & Services → Credentials → Create Credentials → **OAuth 2.0 Client ID**
-   - Application type: **Desktop app**
-   - Download the JSON file
-5. Save it as `credentials.json` in the Jarvis folder
-6. First time you use email, a browser window opens for Google sign-in → authorize → done
-7. Token is saved automatically as `token.json` (auto-refreshes, you won't be asked again)
-8. Set `GMAIL_SENDER_NAME=Your Name` in `.env` for email signatures
+### 4. Gmail Setup (Optional)
 
-### 3. Run
+To use email features, you need Google OAuth credentials:
+1. Go to [Google Cloud Console](https://console.cloud.google.com/)
+2. Create a project → Enable Gmail API
+3. Create OAuth 2.0 credentials → Download as `credentials.json`
+4. Place `credentials.json` in the project root
+5. On first email use, a browser window will open for authorization (creates `token.json`)
 
-**Desktop mode** (local microphone + speakers):
+### 5. Run JARVIS
+
+**Desktop Mode (main):**
 ```bash
 python bot.py
 ```
+- Pick your microphone and speakers at startup
+- A floating overlay appears showing status
+- Just start talking!
 
-**Server mode** (WebSocket for browser clients):
+**Server Mode (for browser clients):**
 ```bash
 python server.py
 ```
+- Runs on http://localhost:8080
+- WebSocket at ws://localhost:8080/ws
 
-## Project Structure
+**Stop:** Press `Ctrl+C` — conversation memory is saved automatically.
+
+---
+
+## 🗂️ Project Structure
 
 ```
-Jarvis/
-├── bot.py              # Main pipeline — voice agent entry point
-├── server.py           # FastAPI WebSocket server (browser mode)
-├── tools.py            # V2A tool definitions & handlers
-├── gmail_service.py    # Gmail API + OAuth2 + HTML email templates
-├── contacts.py         # Contact manager (name → email lookup)
-├── computer_use.py     # Vision-based desktop automation agent
-├── context.py          # Context awareness (active window, time)
-├── memory.py           # Persistent memory system (SQLite + Gemini)
-├── ui.py               # Floating status overlay (tkinter)
-├── requirements.txt    # Python dependencies
-├── .env.example        # Environment variable template
-└── .gitignore          # Git ignore rules
+bot.py              → Main entry point. Voice pipeline.
+tools.py            → V2A tool definitions and handlers
+computer_use.py     → Vision-based computer automation
+memory.py           → SQLite persistent memory
+context.py          → Context awareness (active window, time, etc.)
+contacts.py         → Contact management
+gmail_service.py    → Gmail send/read integration
+ui.py               → Floating status overlay (tkinter)
+server.py           → FastAPI WebSocket server
+requirements.txt    → Python dependencies
+.env.example        → Template for API keys
 ```
 
-## LLM Priority
+**Documentation:**
+- `INSTRUCTIONS_FOR_FRIEND.md` — Detailed dev guide for adding V2A tools
+- `VANOS_Documentation.pdf` / `vanos.pdf` — Full system documentation
 
-JARVIS auto-detects the best available LLM:
+---
 
-1. **Google Gemini** (cloud) — Best option. Fast, great tool calling, vision support for computer use.
-2. **Ollama** (local) — Free, private, no API key needed. Requires local Ollama server.
-3. **Groq** (cloud) — Free tier fallback. Fast inference, limited daily tokens.
+## 🔧 Adding New V2A Tools
 
-## Contributing
+1. **Define schema** in `tools.py` → `get_tools()`:
+```python
+FunctionSchema(
+    name="my_tool",
+    description="What it does — be descriptive for the LLM",
+    properties={
+        "param1": {"type": "string", "description": "What this is for"},
+    },
+    required=["param1"],
+),
+```
 
-This is designed to be extended. Key extension points:
+2. **Add handler:**
+```python
+async def _my_tool(param1: str) -> str:
+    # Your logic here
+    return "Result that JARVIS will speak aloud"
+```
 
-- **New V2A tools** → `tools.py` (see "To add a new V2A tool" above)
-- **New LLM providers** → `get_llm_service()` in `bot.py`
-- **Computer use improvements** → `computer_use.py` (action types, vision prompts)
-- **Memory enhancements** → `memory.py` (new fact categories, smarter summarization)
-- **UI changes** → `ui.py` (overlay states, styling)
+3. **Add routing** in `handle_tool_call()`:
+```python
+elif tool_name == "my_tool":
+    result = await _my_tool(tool_input["param1"])
+```
 
-## License
+4. **Test:** Run `python bot.py` and say something that should trigger your tool.
 
-MIT
+---
+
+## 🐛 Troubleshooting
+
+| Problem | Fix |
+|---------|-----|
+| "No LLM available" | Add `GOOGLE_CREDENTIALS` or `GROQ_API_KEY` to `.env` |
+| PyAudio install fails | Use `pipwin install pyaudio` or download `.whl` |
+| No audio detected | Check mic selection at startup, try increasing `AUDIO_GAIN` in `.env` |
+| Computer use not working | Needs `GOOGLE_CREDENTIALS` (Gemini Vision) |
+| "Module not found" errors | Make sure venv is activated: `venv\Scripts\activate` |
+| TTS not working | Ensure `pipecat[kokoro]` installed via requirements.txt |
+
+---
+
+## 💡 Tool Ideas
+
+- Clipboard read/write
+- System volume control
+- Window management (minimize/maximize/arrange)
+- Windows toast notifications
+- Timers and alarms
+- Calendar integration
+- Media playback control
+- File search
+- Git operations by voice
+
+---
+
+## 📄 License
+
+This project is for personal/educational use.

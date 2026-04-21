@@ -31,6 +31,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Minimal test page
 TEST_PAGE = """
 <!DOCTYPE html>
 <html>
@@ -64,8 +65,7 @@ async def websocket_endpoint(websocket: WebSocket):
         ),
     )
 
-    # Pass transport as keyword argument (not positional)
-    pipeline = await create_pipeline(transport=transport)
+    pipeline = await create_pipeline(transport)
     task = PipelineTask(
         pipeline,
         PipelineParams(allow_interruptions=True),

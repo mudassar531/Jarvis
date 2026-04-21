@@ -19,11 +19,12 @@ from loguru import logger
 
 load_dotenv()
 
-pyautogui.FAILSAFE = True
-pyautogui.PAUSE = 0.3
+# Safety: prevent runaway clicks
+pyautogui.FAILSAFE = True  # move mouse to top-left corner to abort
+pyautogui.PAUSE = 0.3  # small delay between actions
 
-MAX_STEPS = 15
-SCREENSHOT_SCALE = 0.5
+MAX_STEPS = 15  # max actions per task
+SCREENSHOT_SCALE = 0.5  # downscale screenshots to save tokens
 
 VISION_SYSTEM_PROMPT = """You control a Windows 11 PC. You see a screenshot (scaled down but coordinates are for 1920x1080).
 Return ONLY a JSON object — no markdown, no code fences.
@@ -45,7 +46,8 @@ To open an app: Win search or Start menu. When done, set done=true with summary.
 
 def take_screenshot() -> Image.Image:
     """Capture the full screen and return as PIL Image."""
-    return pyautogui.screenshot()
+    screenshot = pyautogui.screenshot()
+    return screenshot
 
 
 def screenshot_to_base64(img: Image.Image, scale: float = SCREENSHOT_SCALE) -> str:
@@ -63,13 +65,16 @@ def parse_action(response_text: str) -> dict:
     """Parse the JSON action from Gemini's response."""
     text = response_text.strip()
 
+    # Strip markdown code fences if present
     if text.startswith("```"):
         text = re.sub(r"^```(?:json)?\s*", "", text)
         text = re.sub(r"\s*```$", "", text)
 
     try:
-        return json.loads(text)
+        action = json.loads(text)
+        return action
     except json.JSONDecodeError:
+        # Try to find JSON in the response
         match = re.search(r"\{[^{}]*\}", text, re.DOTALL)
         if match:
             try:
@@ -88,6 +93,10 @@ def execute_action(action: dict) -> str:
     y = action.get("y", 0)
     text = action.get("text", "")
     key = action.get("key", "")
+
+    # Scale coordinates back if screenshot was downscaled
+    # (Gemini sees the downscaled image, but we tell it coordinates are for 1920x1080)
+    # No scaling needed — we tell Gemini to use 1920x1080 coords directly
 
     logger.info(f"🖱️ Action: {action_type} at ({x},{y}) text='{text}' key='{key}'")
 
@@ -108,6 +117,7 @@ def execute_action(action: dict) -> str:
             if x > 0 and y > 0:
                 pyautogui.click(x, y)
                 time.sleep(0.3)
+            # Use pyperclip + paste for Unicode support
             import pyperclip
             try:
                 pyperclip.copy(text)
@@ -159,6 +169,9 @@ Step: {step}/{MAX_STEPS}{history_text}
 
 Look at the screenshot and decide the next action. Respond with ONLY a JSON object."""
 
+    # Build the request with image
+    image_bytes = base64.b64decode(screenshot_b64)
+
     try:
         response = await asyncio.to_thread(
             client.models.generate_content,
@@ -198,17 +211,20 @@ async def run_computer_use(task: str, status_callback=None) -> str:
     history = []
 
     for step in range(1, MAX_STEPS + 1):
+        # 1. Take screenshot (downscaled for speed — Gemini still gets good detail)
         screenshot = take_screenshot()
         screenshot_b64 = screenshot_to_base64(screenshot, scale=SCREENSHOT_SCALE)
 
         if status_callback:
             status_callback("thinking", f"🖥️ Step {step}: Analyzing screen...")
 
+        # 2. Ask Gemini what to do
         action = await analyze_screen(task, screenshot_b64, history, step)
 
         thought = action.get("thought", "")
         logger.info(f"🧠 Step {step} thought: {thought}")
 
+        # 3. Check if done
         if action.get("done", False) or action.get("action") == "done":
             summary = action.get("summary", "Task completed.")
             logger.info(f"✅ Computer Use completed: {summary}")
@@ -216,14 +232,17 @@ async def run_computer_use(task: str, status_callback=None) -> str:
                 status_callback("speaking", f"✅ Done: {summary[:50]}...")
             return summary
 
+        # 4. Execute the action
         if status_callback:
             status_callback("thinking", f"🖥️ Step {step}: {action.get('action', '?')}...")
 
         result = execute_action(action)
         history.append(f"{action.get('action', '?')}: {result}")
 
+        # Small delay to let UI update
         await asyncio.sleep(0.5)
 
+    # Max steps reached
     summary = f"Reached maximum {MAX_STEPS} steps. Last actions: " + "; ".join(history[-3:])
     logger.warning(f"⚠️ Computer Use max steps: {summary}")
     return summary

@@ -4,6 +4,7 @@ Detects active window, app, and injects context into conversations.
 """
 
 import datetime
+import os
 import platform
 
 from loguru import logger
@@ -25,13 +26,16 @@ def get_active_window_info() -> dict:
             user32 = ctypes.windll.user32
             hwnd = user32.GetForegroundWindow()
 
+            # Get window title
             length = user32.GetWindowTextLengthW(hwnd)
             buf = ctypes.create_unicode_buffer(length + 1)
             user32.GetWindowTextW(hwnd, buf, length + 1)
             info["title"] = buf.value
 
+            # Get process name
+            import ctypes as ct
             pid = wintypes.DWORD()
-            user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+            user32.GetWindowThreadProcessId(hwnd, ct.byref(pid))
 
             import subprocess
             result = subprocess.run(
@@ -52,10 +56,12 @@ def build_context_string() -> str:
     """Build a context string about current system state."""
     parts = []
 
+    # Active window
     window = get_active_window_info()
     if window["title"] != "Unknown":
         parts.append(f"Active window: {window['app']} — \"{window['title']}\"")
 
+    # Time context
     now = datetime.datetime.now()
     hour = now.hour
     if hour < 6:
